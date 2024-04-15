@@ -2,11 +2,12 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <random>
-
+#include <stdio.h>
+#include <float.h>
 
 using namespace std;
 
-#define N 500
+#define N 64
 #define SIZE 32
 
 void init(float *h_k, float *h_u, float *h_v){
@@ -16,13 +17,13 @@ void init(float *h_k, float *h_u, float *h_v){
 
 
     for(int i = 0; i < N*N; i ++){
-        float number = distribution(generator);
-        h_k[i] = number;
+        // float number = distribution(generator);
+        h_k[i] = i+1;
     }
     
     for(int i = 0; i < N; i ++){
-        h_u[i] = 0;
-        h_v[i] = 0;
+        h_u[i] = i+1;
+        h_v[i] = i+1;
     }
 
     return ;
@@ -30,38 +31,35 @@ void init(float *h_k, float *h_u, float *h_v){
 
 __device__ __forceinline__
 void atomicMaxFloat(float *addr, float val){
-    atomicMax((int*)sh_max, __float_as_int(val));
+    atomicMax((int*)addr, __float_as_int(val));
 } 
 
-// each row[i] add d_u[i]
-// then calculate the max for each row
 __global__ void step1(float *d_k, float *d_v, float *d_row_max){
+    
+    int row = blockIdx.x;
+    int col = threadIdx.x;
+    int tid = threadIdx.x;
+    
+    float t_max = -FLT_MAX;
+    extern __shared__ float shared_max[];
 
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // change in the future, we need to set the size to be the block size
-    __shared__ float sh_uv[SIZE];
-    __shared__ float sh_max[SIZE];
-
-    if(threadIdx.x == 0 && row < N){
-        sh_uv[threadIdx.y] = d_v[row];
-        sh_max[threadIdx.y] = -1.0;
-        
+    for(int i = col; i < N; i += blockDim.x){
+        int idx = row * N + i;
+        t_max = fmaxf(t_max, d_k[idx] + d_v[i]);
     }
     __syncthreads();
 
-    if(row < N && col < N){
-        sh_max[threadIdx.y] = atomicMaxFloat(&sh_max[threadIdx.y], d_k[row * N + col] + sh_uv[threadIdx.y]);
-    }
+    shared_max[tid] = t_max;
+    __syncthreads();
 
-
-
-}
-
-// calculate the maximum value per row
-__global__ void step2(){
-
+   for(int i = blockDim.x; i > 0; i /= 2){
+        shared_max[tid] = fmaxf(shared_max[tid], shared_max[tid+i]);
+   }
+   __syncthreads();
+   if(tid == 0){
+    d_row_max[row] = shared_max[0];
+   }
+    
 }
 
 int main(){
@@ -76,7 +74,7 @@ int main(){
     h_u = (float*)malloc(sizeof(float) * N);
     h_v = (float*)malloc(sizeof(float) * N);
     h_row_max = (float*)malloc(sizeof(float) * N);
-    init(h_cost, h_u, h_v);
+    init(h_k, h_u, h_v);
 
     // cuda memeory allocation for GPU
     cudaMalloc(&d_k, bytes);
@@ -93,13 +91,18 @@ int main(){
     int BLOCK_SIZE = min(SIZE, 1024);
     int GRID_SIZE = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
-    dim3 threads(BLOCK_SIZE, BLOCK_SIZE);
-    dim3 grid(GRID_SIZE, GRID_SIZE)
+    dim3 threads(SIZE);
+    dim3 grid(N);
 
     // each row[i] add u[i]
-    step1<<<grid, threads>>>(d_k, d_v, d_row_max);
+    step1<<<grid, threads, (N/SIZE)*sizeof(float)>>>(d_k, d_v, d_row_max);
     
     // calculate the maximum value for each row
+    cudaMemcpy(h_row_max, d_row_max, sizeof(float) * N, cudaMemcpyDeviceToHost);
 
+    for(int i = 0; i < N; i ++){
+        std::cout << "id = " << i << " max value = " << h_row_max[ i ] << std::endl;
+    }
 
+    return 0;
 }
