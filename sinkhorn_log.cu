@@ -7,7 +7,7 @@
 
 using namespace std;
 
-#define N 64
+#define N 37
 #define SIZE 32
 
 void init(float *h_k, float *h_u, float *h_v){
@@ -18,12 +18,12 @@ void init(float *h_k, float *h_u, float *h_v){
 
     for(int i = 0; i < N*N; i ++){
         // float number = distribution(generator);
-        h_k[i] = i+1;
+        h_k[i] = i;
     }
     
     for(int i = 0; i < N; i ++){
-        h_u[i] = i+1;
-        h_v[i] = i+1;
+        h_u[i] = 1.0f/N;
+        h_v[i] = 1.0f/N;
     }
 
     return ;
@@ -34,32 +34,53 @@ void atomicMaxFloat(float *addr, float val){
     atomicMax((int*)addr, __float_as_int(val));
 } 
 
-__global__ void step1(float *d_k, float *d_v, float *d_row_max){
+__global__ void sinkhorn_log_cuda(float *d_k, float *add, float *res){
     
     int row = blockIdx.x;
     int col = threadIdx.x;
     int tid = threadIdx.x;
     
     float t_max = -FLT_MAX;
-    extern __shared__ float shared_max[];
+    float sum = 0;
+    // shared_max store the max value for each row
+    __shared__ float shared_max[32];
+    __shared__ float shared_sum[32];
 
+    // use local memory for eac threads
     for(int i = col; i < N; i += blockDim.x){
         int idx = row * N + i;
-        t_max = fmaxf(t_max, d_k[idx] + d_v[i]);
+        t_max = fmaxf(t_max, d_k[idx] + logf(add[i]));
     }
-    __syncthreads();
 
     shared_max[tid] = t_max;
     __syncthreads();
 
    for(int i = blockDim.x; i > 0; i /= 2){
-        shared_max[tid] = fmaxf(shared_max[tid], shared_max[tid+i]);
+        if(tid + i < N){
+            shared_max[tid] = fmaxf(shared_max[tid], shared_max[tid+i]);
+        }
+        __syncthreads();
    }
+//    shared_max[0] store the maximum for each row;
+   for(int i = col; i < N; i += blockDim.x){
+        int idx = row * N + i;
+        sum += expf(d_k[idx] + logf(add[i]) - shared_max[0]); 
+   }
+
+   shared_sum[tid] = sum;
    __syncthreads();
-   if(tid == 0){
-    d_row_max[row] = shared_max[0];
-   }
-    
+
+   for(int i = blockDim.x; i > 0; i /= 2){
+        if(tid + i < N){
+            shared_sum[tid] += shared_sum[tid+i];
+        }
+        __syncthreads(); 
+    }
+
+    if(tid == 0){
+        res[row] = logf(1) - (logf(shared_sum[0]) + shared_max[0]);
+    }
+
 }
 
 int main(){
@@ -94,14 +115,19 @@ int main(){
     dim3 threads(SIZE);
     dim3 grid(N);
 
-    // each row[i] add u[i]
-    step1<<<grid, threads, (N/SIZE)*sizeof(float)>>>(d_k, d_v, d_row_max);
+    // calculate the sinkhorn log cuda
+    sinkhorn_log_cuda<<<grid, threads>>>(d_k, d_v, d_row_max);
     
     // calculate the maximum value for each row
     cudaMemcpy(h_row_max, d_row_max, sizeof(float) * N, cudaMemcpyDeviceToHost);
 
     for(int i = 0; i < N; i ++){
         std::cout << "id = " << i << " max value = " << h_row_max[ i ] << std::endl;
+    }
+
+    float ground_truth = 0;
+    for(int i = 0; i < N; i ++){
+        ground_truth += (i+1-N);
     }
 
     return 0;
