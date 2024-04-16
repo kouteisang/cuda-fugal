@@ -34,6 +34,15 @@ void atomicMaxFloat(float *addr, float val){
     atomicMax((int*)addr, __float_as_int(val));
 } 
 
+__global__ void matrix_transpose_cuda(float *d_t_k, float *d_k){
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    
+    if(row < N && col < N){
+        d_t_k[col*N + row] = d_k[row*N + col];
+    }
+}
+
 __global__ void sinkhorn_log_cuda(float *d_k, float *add, float *res){
     
     int row = blockIdx.x;
@@ -87,11 +96,12 @@ int main(){
 
     size_t bytes = sizeof(float) * N * N;
 
-    float *h_k, *h_u, *h_v, *h_row_max;
-    float *d_k, *d_u, *d_v, *d_row_max;
+    float *h_k, *h_u, *h_v, *h_row_max, *h_k_t;
+    float *d_k, *d_u, *d_v, *d_row_max, *d_t_k;
 
     // for h_cost
     h_k = (float*)malloc(bytes);
+    h_k_t = (float*)malloc(bytes); 
     h_u = (float*)malloc(sizeof(float) * N);
     h_v = (float*)malloc(sizeof(float) * N);
     h_row_max = (float*)malloc(sizeof(float) * N);
@@ -99,6 +109,7 @@ int main(){
 
     // cuda memeory allocation for GPU
     cudaMalloc(&d_k, bytes);
+    cudaMalloc(&d_t_k, bytes);
     cudaMalloc(&d_u, sizeof(float) * N);
     cudaMalloc(&d_v, sizeof(float) * N);
     cudaMalloc(&d_row_max, sizeof(float) * N);
@@ -109,6 +120,9 @@ int main(){
     cudaMemcpy(d_u, h_u, sizeof(float) * N, cudaMemcpyHostToDevice);
     cudaMemcpy(d_v, h_v, sizeof(float) * N, cudaMemcpyHostToDevice);
 
+
+    matrix_transpose_cuda<<<dim3((N + SIZE - 1) / SIZE, (N + SIZE - 1) / SIZE), dim3(SIZE, SIZE)>>>(d_t_k, d_k);
+
     int BLOCK_SIZE = min(SIZE, 1024);
     int GRID_SIZE = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
@@ -116,19 +130,24 @@ int main(){
     dim3 grid(N);
 
     // calculate the sinkhorn log cuda
-    sinkhorn_log_cuda<<<grid, threads>>>(d_k, d_v, d_row_max);
-    
+    sinkhorn_log_cuda<<<grid, threads>>>(d_t_k, d_u, d_v);
+    sinkhorn_log_cuda<<<grid, threads>>>(d_k, d_v, d_u);
+
+    // cudaMemcpy(h_k_t, d_t_k, bytes, cudaMemcpyDeviceToHost);
     // calculate the maximum value for each row
-    cudaMemcpy(h_row_max, d_row_max, sizeof(float) * N, cudaMemcpyDeviceToHost);
+    // cudaMemcpy(h_row_max, d_row_max, sizeof(float) * N, cudaMemcpyDeviceToHost);
 
-    for(int i = 0; i < N; i ++){
-        std::cout << "id = " << i << " max value = " << h_row_max[ i ] << std::endl;
-    }
-
-    float ground_truth = 0;
-    for(int i = 0; i < N; i ++){
-        ground_truth += (i+1-N);
-    }
+    // for(int i = 0; i < N; i ++){
+    //     std::cout << "id = " << i << " max value = " << h_row_max[ i ] << std::endl;
+    // }
+    
+    // for(int i = 0; i < N; i ++){
+    //     for(int j = 0; j < N; j ++){
+    //         std::cout<< h_k_t[i*N+j] << " ";
+    //     }
+    //     std::cout << std::endl;
+    // }
+    
 
     return 0;
 }
