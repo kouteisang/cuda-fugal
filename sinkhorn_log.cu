@@ -4,23 +4,45 @@
 #include <random>
 #include <stdio.h>
 #include <float.h>
+#include <string>
+#include <fstream>
+#include <sstream>
 
 using namespace std;
 
-#define N 37
+#define N 327
 #define SIZE 32
+// #define float double
 
 void init(float *h_k, float *h_u, float *h_v){
 
     std::default_random_engine generator;
-    std::uniform_real_distribution<float> distribution(0.0, 1.0);
+    std::uniform_real_distribution<float> distribution(0.0, 10.0);
 
+    int cnt = 0;
+    // for(int i = 0; i < N*N; i ++){
+        
+        string fileName = "/home/cheng/ScalableFugal/test_data/10-8.txt";
+        ifstream infile(fileName);
+        if (infile) {
+            string line;
+            while (getline(infile, line)) {
+                istringstream iss(line);
+                string token;
+                while (getline(iss, token, ',')) {
+                    float num = stof(token);
+                    h_k[cnt] = num;
+                    cnt ++;
+                }
+            }
+        }
+        else {
+            cout << "Unable to open file." << endl;
+        }
 
-    for(int i = 0; i < N*N; i ++){
-        // float number = distribution(generator);
-        h_k[i] = i;
-    }
-    
+        
+    // }
+    std::cout << "cnt = " << cnt << std::endl;
     for(int i = 0; i < N; i ++){
         h_u[i] = 1.0f/N;
         h_v[i] = 1.0f/N;
@@ -50,7 +72,7 @@ __global__ void sinkhorn_log_cuda(float *d_k, float *add, float *res){
     int tid = threadIdx.x;
     
     float t_max = -FLT_MAX;
-    float sum = 0;
+    float sum = 0.0f;
     // shared_max store the max value for each row
     __shared__ float shared_max[32];
     __shared__ float shared_sum[32];
@@ -58,7 +80,8 @@ __global__ void sinkhorn_log_cuda(float *d_k, float *add, float *res){
     // use local memory for eac threads
     for(int i = col; i < N; i += blockDim.x){
         int idx = row * N + i;
-        t_max = fmaxf(t_max, d_k[idx] + logf(add[i]));
+        // t_max = fmaxf(t_max, d_k[idx] + logf(add[i]));
+        t_max = fmaxf(t_max, d_k[idx] + add[i]);
     }
 
     shared_max[tid] = t_max;
@@ -73,7 +96,9 @@ __global__ void sinkhorn_log_cuda(float *d_k, float *add, float *res){
 //    shared_max[0] store the maximum for each row;
    for(int i = col; i < N; i += blockDim.x){
         int idx = row * N + i;
-        sum += expf(d_k[idx] + logf(add[i]) - shared_max[0]); 
+        // sum += expf(d_k[idx] + logf(add[i]) - shared_max[0]);
+        sum += expf(d_k[idx] + add[i] - shared_max[0]); 
+ 
    }
 
    shared_sum[tid] = sum;
@@ -87,24 +112,24 @@ __global__ void sinkhorn_log_cuda(float *d_k, float *add, float *res){
     }
 
     if(tid == 0){
-        res[row] = logf(1) - (logf(shared_sum[0]) + shared_max[0]);
+        res[row] =  - (logf(shared_sum[0]) + shared_max[0]);
     }
 
 }
+
 
 int main(){
 
     size_t bytes = sizeof(float) * N * N;
 
-    float *h_k, *h_u, *h_v, *h_row_max, *h_k_t;
-    float *d_k, *d_u, *d_v, *d_row_max, *d_t_k;
+    float *h_k, *h_u, *h_v;
+    float *d_k, *d_u, *d_v, *d_t_k;
 
     // for h_cost
     h_k = (float*)malloc(bytes);
-    h_k_t = (float*)malloc(bytes); 
     h_u = (float*)malloc(sizeof(float) * N);
     h_v = (float*)malloc(sizeof(float) * N);
-    h_row_max = (float*)malloc(sizeof(float) * N);
+
     init(h_k, h_u, h_v);
 
     // cuda memeory allocation for GPU
@@ -112,8 +137,7 @@ int main(){
     cudaMalloc(&d_t_k, bytes);
     cudaMalloc(&d_u, sizeof(float) * N);
     cudaMalloc(&d_v, sizeof(float) * N);
-    cudaMalloc(&d_row_max, sizeof(float) * N);
-     
+
 
     //copy memeory from host to device
     cudaMemcpy(d_k, h_k, bytes, cudaMemcpyHostToDevice);
@@ -130,24 +154,40 @@ int main(){
     dim3 grid(N);
 
     // calculate the sinkhorn log cuda
-    sinkhorn_log_cuda<<<grid, threads>>>(d_t_k, d_u, d_v);
-    sinkhorn_log_cuda<<<grid, threads>>>(d_k, d_v, d_u);
+    for(int i = 0; i < 1; i ++){
+        sinkhorn_log_cuda<<<grid, threads>>>(d_t_k, d_u, d_v);
+        sinkhorn_log_cuda<<<grid, threads>>>(d_k, d_v, d_u);
+    }
 
-    // cudaMemcpy(h_k_t, d_t_k, bytes, cudaMemcpyDeviceToHost);
-    // calculate the maximum value for each row
-    // cudaMemcpy(h_row_max, d_row_max, sizeof(float) * N, cudaMemcpyDeviceToHost);
+
+    cudaMemcpy(h_u, d_u, sizeof(float) * N, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_v, d_v, sizeof(float) * N, cudaMemcpyDeviceToHost);
 
     // for(int i = 0; i < N; i ++){
-    //     std::cout << "id = " << i << " max value = " << h_row_max[ i ] << std::endl;
+    //     std::cout << h_u[i] << " " << h_v[i] << " ";
     // }
-    
-    // for(int i = 0; i < N; i ++){
-    //     for(int j = 0; j < N; j ++){
-    //         std::cout<< h_k_t[i*N+j] << " ";
-    //     }
-    //     std::cout << std::endl;
-    // }
-    
+    std::cout << std::endl;
+
+    for(int i = 0; i < N; i ++){
+        for(int j = 0; j < N; j ++){
+            h_k[i*N+j] += h_u[i];
+            h_k[i*N+j] += h_v[j];
+        }
+    }
+      
+    for(int i = 0; i < N; i ++){
+        for(int j = 0; j < N; j ++){
+            h_k[i*N+j] = exp(h_k[i*N+j]);
+        }
+    }
+
+    for(int i = 0; i < N; i ++){
+        float summ = 0;
+        for(int j = 0; j < N; j ++){
+            summ += h_k[i*N+j];
+        }
+        std::cout << "summ = " << summ << std::endl;
+    }
 
     return 0;
 }
