@@ -10,53 +10,53 @@
 
 using namespace std;
 
-#define N 327
+// #define N 327
 #define SIZE 32
 // #define float double
 
-void init(float *h_k, float *h_u, float *h_v){
+// void init(float *h_k, float *h_u, float *h_v){
 
-    std::default_random_engine generator;
-    std::uniform_real_distribution<float> distribution(0.0, 10.0);
+//     std::default_random_engine generator;
+//     std::uniform_real_distribution<float> distribution(0.0, 10.0);
 
-    int cnt = 0;
-    // for(int i = 0; i < N*N; i ++){
+//     int cnt = 0;
+//     // for(int i = 0; i < N*N; i ++){
         
-        string fileName = "/home/cheng/ScalableFugal/test_data/10-8.txt";
-        ifstream infile(fileName);
-        if (infile) {
-            string line;
-            while (getline(infile, line)) {
-                istringstream iss(line);
-                string token;
-                while (getline(iss, token, ',')) {
-                    float num = stof(token);
-                    h_k[cnt] = num;
-                    cnt ++;
-                }
-            }
-        }
-        else {
-            cout << "Unable to open file." << endl;
-        }
+//         string fileName = "/home/cheng/ScalableFugal/test_data/4-7.txt";
+//         ifstream infile(fileName);
+//         if (infile) {
+//             string line;
+//             while (getline(infile, line)) {
+//                 istringstream iss(line);
+//                 string token;
+//                 while (getline(iss, token, ',')) {
+//                     float num = stof(token);
+//                     h_k[cnt] = num;
+//                     cnt ++;
+//                 }
+//             }
+//         }
+//         else {
+//             cout << "Unable to open file." << endl;
+//         }
 
         
-    // }
-    std::cout << "cnt = " << cnt << std::endl;
-    for(int i = 0; i < N; i ++){
-        h_u[i] = 1.0f/N;
-        h_v[i] = 1.0f/N;
-    }
+//     // }
+//     std::cout << "cnt = " << cnt << std::endl;
+//     for(int i = 0; i < N; i ++){
+//         h_u[i] = 1.0f/N;
+//         h_v[i] = 1.0f/N;
+//     }
 
-    return ;
-}
+//     return ;
+// }
 
 __device__ __forceinline__
 void atomicMaxFloat(float *addr, float val){
     atomicMax((int*)addr, __float_as_int(val));
 } 
 
-__global__ void matrix_transpose_cuda(float *d_t_k, float *d_k){
+__global__ void matrix_transpose_cuda(float *d_t_k, float *d_k, size_t N){
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
     
@@ -65,7 +65,7 @@ __global__ void matrix_transpose_cuda(float *d_t_k, float *d_k){
     }
 }
 
-__global__ void sinkhorn_log_cuda(float *d_k, float *add, float *res){
+__global__ void sinkhorn_log_cuda(float *d_k, float *add, float *res, const int N){
     
     int row = blockIdx.x;
     int col = threadIdx.x;
@@ -80,7 +80,6 @@ __global__ void sinkhorn_log_cuda(float *d_k, float *add, float *res){
     // use local memory for eac threads
     for(int i = col; i < N; i += blockDim.x){
         int idx = row * N + i;
-        // t_max = fmaxf(t_max, d_k[idx] + logf(add[i]));
         t_max = fmaxf(t_max, d_k[idx] + add[i]);
     }
 
@@ -96,9 +95,7 @@ __global__ void sinkhorn_log_cuda(float *d_k, float *add, float *res){
 //    shared_max[0] store the maximum for each row;
    for(int i = col; i < N; i += blockDim.x){
         int idx = row * N + i;
-        // sum += expf(d_k[idx] + logf(add[i]) - shared_max[0]);
-        sum += expf(d_k[idx] + add[i] - shared_max[0]); 
- 
+        sum += expf(d_k[idx] + add[i] - shared_max[0]);
    }
 
    shared_sum[tid] = sum;
@@ -114,80 +111,100 @@ __global__ void sinkhorn_log_cuda(float *d_k, float *add, float *res){
     if(tid == 0){
         res[row] =  - (logf(shared_sum[0]) + shared_max[0]);
     }
-
 }
 
 
-int main(){
+// int main(){
 
-    size_t bytes = sizeof(float) * N * N;
+//     size_t bytes = sizeof(float) * N * N;
 
-    float *h_k, *h_u, *h_v;
-    float *d_k, *d_u, *d_v, *d_t_k;
+//     float *h_k, *h_u, *h_v;
+//     float *d_k, *d_u, *d_v, *d_t_k;
 
-    // for h_cost
-    h_k = (float*)malloc(bytes);
-    h_u = (float*)malloc(sizeof(float) * N);
-    h_v = (float*)malloc(sizeof(float) * N);
+//     // for h_cost
+//     h_k = (float*)malloc(bytes);
+//     h_u = (float*)malloc(sizeof(float) * N);
+//     h_v = (float*)malloc(sizeof(float) * N);
 
-    init(h_k, h_u, h_v);
+//     init(h_k, h_u, h_v);
 
-    // cuda memeory allocation for GPU
-    cudaMalloc(&d_k, bytes);
-    cudaMalloc(&d_t_k, bytes);
-    cudaMalloc(&d_u, sizeof(float) * N);
-    cudaMalloc(&d_v, sizeof(float) * N);
-
-
-    //copy memeory from host to device
-    cudaMemcpy(d_k, h_k, bytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_u, h_u, sizeof(float) * N, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_v, h_v, sizeof(float) * N, cudaMemcpyHostToDevice);
+//     // cuda memeory allocation for GPU
+//     cudaMalloc(&d_k, bytes);
+//     cudaMalloc(&d_t_k, bytes);
+//     cudaMalloc(&d_u, sizeof(float) * N);
+//     cudaMalloc(&d_v, sizeof(float) * N);
 
 
-    matrix_transpose_cuda<<<dim3((N + SIZE - 1) / SIZE, (N + SIZE - 1) / SIZE), dim3(SIZE, SIZE)>>>(d_t_k, d_k);
+//     //copy memeory from host to device
+//     cudaMemcpy(d_k, h_k, bytes, cudaMemcpyHostToDevice);
+//     cudaMemcpy(d_u, h_u, sizeof(float) * N, cudaMemcpyHostToDevice);
+//     cudaMemcpy(d_v, h_v, sizeof(float) * N, cudaMemcpyHostToDevice);
 
-    int BLOCK_SIZE = min(SIZE, 1024);
-    int GRID_SIZE = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
+//     matrix_transpose_cuda<<<dim3((N + SIZE - 1) / SIZE, (N + SIZE - 1) / SIZE), dim3(SIZE, SIZE)>>>(d_t_k, d_k);
+
+//     int BLOCK_SIZE = min(SIZE, 1024);
+//     int GRID_SIZE = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+
+//     dim3 threads(SIZE);
+//     dim3 grid(N);
+
+//     // calculate the sinkhorn log cuda
+//     for(int i = 0; i < 20; i ++){
+//         sinkhorn_log_cuda<<<grid, threads>>>(d_t_k, d_u, d_v);
+//         sinkhorn_log_cuda<<<grid, threads>>>(d_k, d_v, d_u);
+//     }
+
+
+//     cudaMemcpy(h_u, d_u, sizeof(float) * N, cudaMemcpyDeviceToHost);
+//     cudaMemcpy(h_v, d_v, sizeof(float) * N, cudaMemcpyDeviceToHost);
+
+//     std::cout << std::endl;
+
+//     for(int i = 0; i < N; i ++){
+//         for(int j = 0; j < N; j ++){
+//             h_k[i*N+j] += h_u[i];
+//             h_k[i*N+j] += h_v[j];
+//         }
+//     }
+      
+//     for(int i = 0; i < N; i ++){
+//         for(int j = 0; j < N; j ++){
+//             h_k[i*N+j] = exp(h_k[i*N+j]);
+//         }
+//     }
+
+//     for(int i = 0; i < N; i ++){
+//         float summ = 0;
+//         for(int j = 0; j < N; j ++){
+//             summ += h_k[i*N+j];
+//         }
+//         std::cout << "summ = " << summ << std::endl;
+//     }
+
+//     for(int j = 0; j < N; j ++){
+//         float summ = 0;
+//         for(int i = 0; i < N; i ++){
+//             summ += h_k[i*N+j];
+//         }
+//         std::cout << "summ = " << summ << std::endl;
+//     }
+
+//     return 0;
+// }
+
+void sinkhorn_log_glue(float *d_k, float *add, float *res, size_t N){
+ 
     dim3 threads(SIZE);
     dim3 grid(N);
+    sinkhorn_log_cuda<<<grid, threads>>>(d_k, add, res, N);
 
-    // calculate the sinkhorn log cuda
-    for(int i = 0; i < 1; i ++){
-        sinkhorn_log_cuda<<<grid, threads>>>(d_t_k, d_u, d_v);
-        sinkhorn_log_cuda<<<grid, threads>>>(d_k, d_v, d_u);
-    }
+}
 
+void matrix_transpose_glue(float *d_t_k, float *d_k, size_t N){
 
-    cudaMemcpy(h_u, d_u, sizeof(float) * N, cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_v, d_v, sizeof(float) * N, cudaMemcpyDeviceToHost);
-
-    // for(int i = 0; i < N; i ++){
-    //     std::cout << h_u[i] << " " << h_v[i] << " ";
-    // }
-    std::cout << std::endl;
-
-    for(int i = 0; i < N; i ++){
-        for(int j = 0; j < N; j ++){
-            h_k[i*N+j] += h_u[i];
-            h_k[i*N+j] += h_v[j];
-        }
-    }
-      
-    for(int i = 0; i < N; i ++){
-        for(int j = 0; j < N; j ++){
-            h_k[i*N+j] = exp(h_k[i*N+j]);
-        }
-    }
-
-    for(int i = 0; i < N; i ++){
-        float summ = 0;
-        for(int j = 0; j < N; j ++){
-            summ += h_k[i*N+j];
-        }
-        std::cout << "summ = " << summ << std::endl;
-    }
-
-    return 0;
+    dim3 threads(SIZE, SIZE);
+    dim3 grid((N + SIZE - 1) / SIZE, (N + SIZE - 1) / SIZE);
+    matrix_transpose_cuda<<<grid, threads>>>(d_t_k, d_k, N);
+ 
 }
